@@ -36,7 +36,7 @@ Examples:
 # Using explicit selectors (adjust to your DOM)
 ./bin/homevoltscraper -charged-selector ".charged" -discharged-selector ".discharged"
 
-# JS-rendered pages (chromedp on by default)
+# Headless render (chromedp only)
 ./bin/homevoltscraper -format json
 
 # Wait until a specific element appears (recommended)
@@ -50,4 +50,4 @@ Examples:
 - If selectors are not provided, the scraper falls back to scanning nearby text for keywords like "charged"/"discharged" and reading the closest numeric value.
 - If parsing fails, it reports which value couldn't be parsed.
 - The parser specifically matches patterns like "2.11 kWh charged" and "8.98 kWh discharged" anywhere in page text.
-- For JS-driven pages, chromedp renders the page first; use `-wait-selector` (preferred) or `-wait` to ensure data is loaded.
+- chromedp renders the page; use `-wait-selector` (preferred) or `-wait` to ensure data is loaded.

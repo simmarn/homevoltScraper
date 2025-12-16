@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -17,8 +16,6 @@ type Config struct {
 	URL                string
 	ChargedSelector    string
 	DischargedSelector string
-	User               string
-	Pass               string
 	WaitSelector       string
 	Wait               time.Duration
 }
@@ -29,80 +26,22 @@ type Result struct {
 	Source        string  `json:"source"`
 }
 
-func FetchAndParse(client *http.Client, cfg Config) (Result, error) {
-	var out Result
-	req, err := http.NewRequest("GET", cfg.URL, nil)
-	if err != nil {
-		return out, err
-	}
-	if cfg.User != "" || cfg.Pass != "" {
-		req.SetBasicAuth(cfg.User, cfg.Pass)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return out, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return out, fmt.Errorf("HTTP status %d", resp.StatusCode)
-	}
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		return out, err
-	}
-
-	// Try selectors first, then regex fallback
-	chargedText := selectText(doc, cfg.ChargedSelector)
-	dischargedText := selectText(doc, cfg.DischargedSelector)
-
-	if chargedText == "" || dischargedText == "" {
-		fullText := doc.Text()
-		if vc, vd, ok := extractKWhFromText(fullText); ok {
-			out.KWhCharged = vc
-			out.KWhDischarged = vd
-			out.Source = cfg.URL
-			return out, nil
-		}
-		// Direct regex patterns commonly found in dashboards/text
-		// Examples: "kWh charged: 12.34", "charged 12.34 kWh", etc.
-		if v, ok := regexFindKWh(fullText, []string{"charged", "charge"}); ok {
-			chargedText = v
-		} else {
-			chargedText = findValueNear(fullText, []string{"charged", "charge"})
-		}
-		if v, ok := regexFindKWh(fullText, []string{"discharged", "discharge"}); ok {
-			dischargedText = v
-		} else {
-			dischargedText = findValueNear(fullText, []string{"discharged", "discharge"})
-		}
-	}
-
-	var parseErrs []string
-	if v, ok := parseKWh(chargedText); ok {
-		out.KWhCharged = v
-	} else {
-		parseErrs = append(parseErrs, "charged")
-	}
-	if v, ok := parseKWh(dischargedText); ok {
-		out.KWhDischarged = v
-	} else {
-		parseErrs = append(parseErrs, "discharged")
-	}
-
-	if len(parseErrs) > 0 {
-		return out, errors.New("failed to parse: " + strings.Join(parseErrs, ", "))
-	}
-	out.Source = cfg.URL
-	return out, nil
-}
-
 // FetchAndParseChromedp renders the page via headless Chrome and extracts values.
 func FetchAndParseChromedp(cfg Config) (Result, error) {
 	var out Result
-	ctx, cancel := chromedp.NewContext(context.Background())
+	// Create a quiet chromedp context to avoid noisy logs to stderr
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Headless,
+		chromedp.DisableGPU,
+		chromedp.NoSandbox,
+	)...)
+	defer cancelAlloc()
+	// Suppress chromedp logs (Info/Debug/Error)
+	nop := func(string, ...any) {}
+	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(nop), chromedp.WithDebugf(nop), chromedp.WithErrorf(nop))
 	defer cancel()
 	// Timeout to avoid hanging.
-	ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	var html string
