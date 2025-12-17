@@ -21,8 +21,8 @@ type Config struct {
 }
 
 type Result struct {
-	KWhCharged    float64 `json:"kWh_charged"`
 	KWhDischarged float64 `json:"kWh_discharged"`
+	KWhCharged    float64 `json:"kWh_charged"`
 	Source        string  `json:"source"`
 }
 
@@ -70,8 +70,8 @@ func FetchAndParseChromedp(cfg Config) (Result, error) {
 	if chargedText == "" || dischargedText == "" {
 		fullText := doc.Text()
 		if vc, vd, ok := extractKWhFromText(fullText); ok {
-			out.KWhCharged = vc
-			out.KWhDischarged = vd
+			out.KWhDischarged = vc
+			out.KWhCharged = vd
 			out.Source = cfg.URL
 			return out, nil
 		}
@@ -88,12 +88,12 @@ func FetchAndParseChromedp(cfg Config) (Result, error) {
 	}
 	var parseErrs []string
 	if v, ok := parseKWh(chargedText); ok {
-		out.KWhCharged = v
+		out.KWhDischarged = v
 	} else {
 		parseErrs = append(parseErrs, "charged")
 	}
 	if v, ok := parseKWh(dischargedText); ok {
-		out.KWhDischarged = v
+		out.KWhCharged = v
 	} else {
 		parseErrs = append(parseErrs, "discharged")
 	}

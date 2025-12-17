@@ -42,7 +42,7 @@ func main() {
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(res)
 	default:
-		fmt.Printf("kWh charged: %.3f\n", res.KWhCharged)
 		fmt.Printf("kWh discharged: %.3f\n", res.KWhDischarged)
+		fmt.Printf("kWh charged: %.3f\n", res.KWhCharged)
 	}
 }
