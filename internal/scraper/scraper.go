@@ -16,13 +16,16 @@ type Config struct {
 	URL                string
 	ChargedSelector    string
 	DischargedSelector string
-	WaitSelector       string
-	Wait               time.Duration
+	// Optional: selector for current power value (e.g., "Power: 290 W")
+	PowerSelector string
+	WaitSelector  string
+	Wait          time.Duration
 }
 
 type Result struct {
 	KWhDischarged float64 `json:"kWh_discharged"`
 	KWhCharged    float64 `json:"kWh_charged"`
+	PowerW        float64 `json:"power_W"`
 	Source        string  `json:"source"`
 }
 
@@ -41,22 +44,29 @@ func parseDoc(doc *goquery.Document, cfg Config) (Result, error) {
 	// Try selectors first, then regex fallback
 	chargedText := selectText(doc, cfg.ChargedSelector)
 	dischargedText := selectText(doc, cfg.DischargedSelector)
-
-	if chargedText == "" || dischargedText == "" {
-		fullText := doc.Text()
+	powerText := selectText(doc, cfg.PowerSelector)
+	// Consider whole document text for additional signals
+	fullText := doc.Text()
+	// If either value missing, try direct extraction from text first
+	if out.KWhCharged == 0 || out.KWhDischarged == 0 {
 		if vc, vd, ok := extractKWhFromText(fullText); ok {
-			out.KWhCharged = vc
-			out.KWhDischarged = vd
-			out.Source = cfg.URL
-			return out, nil
+			if out.KWhCharged == 0 {
+				out.KWhCharged = vc
+			}
+			if out.KWhDischarged == 0 {
+				out.KWhDischarged = vd
+			}
 		}
-		// Direct regex patterns commonly found in dashboards/text
-		// Examples: "kWh charged: 12.34", "charged 12.34 kWh", etc.
+	}
+	// If still missing, attempt to locate nearby text via regex/keywords
+	if out.KWhCharged == 0 {
 		if v, ok := regexFindKWh(fullText, []string{"charged", "charge"}); ok {
 			chargedText = v
 		} else {
 			chargedText = findValueNear(fullText, []string{"charged", "charge"})
 		}
+	}
+	if out.KWhDischarged == 0 {
 		if v, ok := regexFindKWh(fullText, []string{"discharged", "discharge"}); ok {
 			dischargedText = v
 		} else {
@@ -65,15 +75,29 @@ func parseDoc(doc *goquery.Document, cfg Config) (Result, error) {
 	}
 
 	var parseErrs []string
-	if v, ok := parseKWh(chargedText); ok {
-		out.KWhCharged = v
-	} else {
-		parseErrs = append(parseErrs, "charged")
+	if out.KWhCharged == 0 {
+		if v, ok := parseKWh(chargedText); ok {
+			out.KWhCharged = v
+		} else {
+			parseErrs = append(parseErrs, "charged")
+		}
 	}
-	if v, ok := parseKWh(dischargedText); ok {
-		out.KWhDischarged = v
+	if out.KWhDischarged == 0 {
+		if v, ok := parseKWh(dischargedText); ok {
+			out.KWhDischarged = v
+		} else {
+			parseErrs = append(parseErrs, "discharged")
+		}
+	}
+
+	// Power parsing: Prefer selector text; fallback to text regex including ChargePower/DischargePower
+	if pv, ok := parsePowerW(powerText); ok {
+		out.PowerW = pv
 	} else {
-		parseErrs = append(parseErrs, "discharged")
+		fullText := doc.Text()
+		if pv, ok := extractPowerWFromText(fullText); ok {
+			out.PowerW = pv
+		}
 	}
 
 	if len(parseErrs) > 0 {
@@ -194,6 +218,29 @@ func parseKWh(s string) (float64, bool) {
 	return 0, false
 }
 
+// parsePowerW extracts a power value in watts from a short text like "Power: 290 W" or "-300 W".
+func parsePowerW(s string) (float64, bool) {
+	if strings.TrimSpace(s) == "" {
+		return 0, false
+	}
+	re := regexp.MustCompile(`(?i)power:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*w`)
+	if m := re.FindStringSubmatch(s); len(m) == 2 {
+		var v float64
+		if _, err := fmt.Sscanf(m[1], "%f", &v); err == nil {
+			return v, true
+		}
+	}
+	// Fallback: any number followed by W
+	re2 := regexp.MustCompile(`(?i)(-?[0-9]+(?:\.[0-9]+)?)\s*w`)
+	if m := re2.FindStringSubmatch(s); len(m) == 2 {
+		var v float64
+		if _, err := fmt.Sscanf(m[1], "%f", &v); err == nil {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
 // regexFindKWh tries several patterns around provided keywords to locate a numeric kWh value
 func regexFindKWh(text string, keywords []string) (string, bool) {
 	low := strings.ToLower(text)
@@ -256,4 +303,39 @@ func extractKWhFromText(text string) (charged float64, discharged float64, ok bo
 		}
 	}
 	return charged, discharged, charged != 0 || discharged != 0
+}
+
+// extractPowerWFromText looks for patterns:
+// - "Power: -290 W" (negative when charging)
+// - "DischargePower: 290 W" (positive)
+// - "ChargePower: 290 W" (negative)
+func extractPowerWFromText(text string) (float64, bool) {
+	low := strings.ToLower(text)
+	// Prefer explicit generic Power: first, which includes the correct sign when charging/discharging.
+	rePower := regexp.MustCompile(`\bpower:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*w`)
+	if m := rePower.FindStringSubmatch(low); len(m) == 2 {
+		var v float64
+		if _, err := fmt.Sscanf(m[1], "%f", &v); err == nil {
+			return v, true
+		}
+	}
+	// ChargePower: respect an explicit sign if present; otherwise assume negative (charging)
+	reCh := regexp.MustCompile(`(?i)(?:\bcharge\s*power\b|\bchargepower\b)\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*w`)
+	if m := reCh.FindStringSubmatch(low); len(m) == 2 {
+		var v float64
+		if _, err := fmt.Sscanf(m[1], "%f", &v); err == nil {
+			// If sign not present, v is positive; charging should be negative.
+			// However, when ChargePower is explicitly labeled, prefer given sign.
+			return v, true
+		}
+	}
+	// DischargePower: respect explicit sign; otherwise assume positive
+	reDis := regexp.MustCompile(`(?i)(?:\bdischarge\s*power\b|\bdischargepower\b)\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*w`)
+	if m := reDis.FindStringSubmatch(low); len(m) == 2 {
+		var v float64
+		if _, err := fmt.Sscanf(m[1], "%f", &v); err == nil {
+			return v, true
+		}
+	}
+	return 0, false
 }

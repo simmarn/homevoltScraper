@@ -16,12 +16,10 @@ func main() {
 	chargedSel := flag.String("charged-selector", "", "CSS selector to locate kWh charged text")
 	dischargedSel := flag.String("discharged-selector", "", "CSS selector to locate kWh discharged text")
 	format := flag.String("format", "text", "Output format: text or json")
-	// chromedp is always used; no HTTP path
 	waitSel := flag.String("wait-selector", "", "chromedp: CSS selector to wait for before scraping")
 	wait := flag.Duration("wait", 2*time.Second, "chromedp: wait duration before scraping if no selector is provided")
+	powerSel := flag.String("power-selector", "", "CSS selector to locate current power text (e.g., 'Power: 290 W')")
 	flag.Parse()
-
-	// Local file mode removed to simplify CLI and avoid dead code.
 
 	var res scraper.Result
 	var err error
@@ -29,6 +27,7 @@ func main() {
 		URL:                *url,
 		ChargedSelector:    *chargedSel,
 		DischargedSelector: *dischargedSel,
+		PowerSelector:      *powerSel,
 		WaitSelector:       *waitSel,
 		Wait:               *wait,
 	})
@@ -44,5 +43,6 @@ func main() {
 	default:
 		fmt.Printf("kWh discharged: %.3f\n", res.KWhDischarged)
 		fmt.Printf("kWh charged: %.3f\n", res.KWhCharged)
+		fmt.Printf("Power: %.1f W\n", res.PowerW)
 	}
 }

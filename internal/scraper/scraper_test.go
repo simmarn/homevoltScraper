@@ -19,4 +19,58 @@ func TestParseHTML_ChargedDischargedPatterns(t *testing.T) {
 	if res.KWhDischarged == 0 {
 		t.Errorf("expected discharged > 0, got %v", res.KWhDischarged)
 	}
+	if res.PowerW <= 0 {
+		t.Errorf("expected positive discharge power, got %v", res.PowerW)
+	}
+}
+
+func TestParseHTML_NegativeChargePower(t *testing.T) {
+	html := `<html><body>
+	State: Running
+	Power: -300 W
+	01.00 kWh charged 0.50 kWh discharged
+	</body></html>`
+
+	res, err := ParseHTML(html, Config{URL: "http://example.local/battery/"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.PowerW >= 0 {
+		t.Errorf("expected negative charging power, got %v", res.PowerW)
+	}
+	if res.KWhCharged == 0 {
+		t.Errorf("expected charged > 0, got %v", res.KWhCharged)
+	}
+}
+
+func TestParseHTML_ChargePowerIsNegative(t *testing.T) {
+	html := `<html><body>
+	State: Running
+	ChargePower: -300 W
+	01.00 kWh charged 0.50 kWh discharged
+	</body></html>`
+
+	res, err := ParseHTML(html, Config{URL: "http://example.local/battery/"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.PowerW >= 0 {
+		t.Errorf("expected negative power for ChargePower, got %v", res.PowerW)
+	}
+}
+
+func TestParseHTML_DischargePowerIsPositive(t *testing.T) {
+	html := `<html><body>
+	State: Running
+	DischargePower: 300 W
+	00.20 kWh charged 1.00 kWh discharged
+	</body></html>`
+
+	res, err := ParseHTML(html, Config{URL: "http://example.local/battery/"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.PowerW <= 0 {
+		t.Errorf("expected positive power for DischargePower, got %v", res.PowerW)
+	}
 }
