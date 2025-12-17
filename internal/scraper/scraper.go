@@ -26,6 +26,63 @@ type Result struct {
 	Source        string  `json:"source"`
 }
 
+// ParseHTML parses the provided HTML and extracts kWh charged/discharged.
+func ParseHTML(html string, cfg Config) (Result, error) {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return Result{}, err
+	}
+	return parseDoc(doc, cfg)
+}
+
+// parseDoc contains the core parsing logic operating on a goquery Document.
+func parseDoc(doc *goquery.Document, cfg Config) (Result, error) {
+	var out Result
+	// Try selectors first, then regex fallback
+	chargedText := selectText(doc, cfg.ChargedSelector)
+	dischargedText := selectText(doc, cfg.DischargedSelector)
+
+	if chargedText == "" || dischargedText == "" {
+		fullText := doc.Text()
+		if vc, vd, ok := extractKWhFromText(fullText); ok {
+			out.KWhCharged = vc
+			out.KWhDischarged = vd
+			out.Source = cfg.URL
+			return out, nil
+		}
+		// Direct regex patterns commonly found in dashboards/text
+		// Examples: "kWh charged: 12.34", "charged 12.34 kWh", etc.
+		if v, ok := regexFindKWh(fullText, []string{"charged", "charge"}); ok {
+			chargedText = v
+		} else {
+			chargedText = findValueNear(fullText, []string{"charged", "charge"})
+		}
+		if v, ok := regexFindKWh(fullText, []string{"discharged", "discharge"}); ok {
+			dischargedText = v
+		} else {
+			dischargedText = findValueNear(fullText, []string{"discharged", "discharge"})
+		}
+	}
+
+	var parseErrs []string
+	if v, ok := parseKWh(chargedText); ok {
+		out.KWhCharged = v
+	} else {
+		parseErrs = append(parseErrs, "charged")
+	}
+	if v, ok := parseKWh(dischargedText); ok {
+		out.KWhDischarged = v
+	} else {
+		parseErrs = append(parseErrs, "discharged")
+	}
+
+	if len(parseErrs) > 0 {
+		return out, errors.New("failed to parse: " + strings.Join(parseErrs, ", "))
+	}
+	out.Source = cfg.URL
+	return out, nil
+}
+
 // FetchAndParseChromedp renders the page via headless Chrome and extracts values.
 func FetchAndParseChromedp(cfg Config) (Result, error) {
 	var out Result
@@ -60,50 +117,42 @@ func FetchAndParseChromedp(cfg Config) (Result, error) {
 		return out, err
 	}
 
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		return out, err
-	}
-
-	chargedText := selectText(doc, cfg.ChargedSelector)
-	dischargedText := selectText(doc, cfg.DischargedSelector)
-	if chargedText == "" || dischargedText == "" {
-		fullText := doc.Text()
-		if vc, vd, ok := extractKWhFromText(fullText); ok {
-			out.KWhDischarged = vc
-			out.KWhCharged = vd
-			out.Source = cfg.URL
-			return out, nil
-		}
-		if v, ok := regexFindKWh(fullText, []string{"charged", "charge"}); ok {
-			chargedText = v
-		} else {
-			chargedText = findValueNear(fullText, []string{"charged", "charge"})
-		}
-		if v, ok := regexFindKWh(fullText, []string{"discharged", "discharge"}); ok {
-			dischargedText = v
-		} else {
-			dischargedText = findValueNear(fullText, []string{"discharged", "discharge"})
-		}
-	}
-	var parseErrs []string
-	if v, ok := parseKWh(chargedText); ok {
-		out.KWhDischarged = v
-	} else {
-		parseErrs = append(parseErrs, "charged")
-	}
-	if v, ok := parseKWh(dischargedText); ok {
-		out.KWhCharged = v
-	} else {
-		parseErrs = append(parseErrs, "discharged")
-	}
-	if len(parseErrs) > 0 {
-		return out, errors.New("failed to parse: " + strings.Join(parseErrs, ", "))
-	}
-	out.Source = cfg.URL
-	return out, nil
+	// Parse using the shared HTML parser
+	return ParseHTML(html, cfg)
 }
 
+// RenderHTMLChromedp navigates and returns the full rendered HTML for separate parsing and tests.
+func RenderHTMLChromedp(cfg Config) (string, error) {
+	// Create a quiet chromedp context
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Headless,
+		chromedp.DisableGPU,
+		chromedp.NoSandbox,
+	)...)
+	defer cancelAlloc()
+	nop := func(string, ...any) {}
+	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(nop), chromedp.WithDebugf(nop), chromedp.WithErrorf(nop))
+	defer cancel()
+	ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	var html string
+	waitDur := cfg.Wait
+	if waitDur <= 0 {
+		waitDur = 2 * time.Second
+	}
+	tasks := chromedp.Tasks{chromedp.Navigate(cfg.URL)}
+	if strings.TrimSpace(cfg.WaitSelector) != "" {
+		tasks = append(tasks, chromedp.WaitVisible(cfg.WaitSelector, chromedp.ByQuery))
+	} else {
+		tasks = append(tasks, chromedp.Sleep(waitDur))
+	}
+	tasks = append(tasks, chromedp.OuterHTML("html", &html, chromedp.ByQuery))
+	if err := chromedp.Run(ctx, tasks); err != nil {
+		return "", err
+	}
+	return html, nil
+}
 func selectText(doc *goquery.Document, sel string) string {
 	if strings.TrimSpace(sel) == "" {
 		return ""
