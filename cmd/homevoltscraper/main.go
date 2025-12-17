@@ -35,6 +35,9 @@ func main() {
 		log.Fatalf("error: %v", err)
 	}
 
+	// Correct mislabeled webpage: always swap charged/discharged in output
+	res.KWhCharged, res.KWhDischarged = res.KWhDischarged, res.KWhCharged
+
 	switch *format {
 	case "json":
 		enc := json.NewEncoder(os.Stdout)
