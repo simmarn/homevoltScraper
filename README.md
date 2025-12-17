@@ -19,10 +19,9 @@ GO111MODULE=on go build -o bin/homevoltscraper ./cmd/homevoltscraper
 ```
 
 Optional flags:
-- `-charged-selector` and `-discharged-selector`: CSS selectors if the values are in specific elements.
-- `-timeout`: HTTP timeout (e.g. `10s`).
-- `-user` / `-pass`: Basic auth if the page is protected.
 - `-format`: `text` (default) or `json`.
+- `-wait-selector`: CSS selector to wait for (chromedp).
+- `-wait`: duration to wait before scraping if no selector is provided.
 
 Examples:
 
@@ -33,10 +32,7 @@ Examples:
 # JSON output
 ./bin/homevoltscraper -format json
 
-# Using explicit selectors (adjust to your DOM)
-./bin/homevoltscraper -charged-selector ".charged" -discharged-selector ".discharged"
-
-# Headless render (chromedp only)
+# Headless render (chromedp)
 ./bin/homevoltscraper -format json
 
 # Wait until a specific element appears (recommended)
@@ -47,7 +43,9 @@ Examples:
 ```
 
 ## Notes
-- If selectors are not provided, the scraper falls back to scanning nearby text for keywords like "charged"/"discharged" and reading the closest numeric value.
+- The scraper renders the page via headless Chrome (chromedp) and parses text-only; no CSS selectors are required.
 - If parsing fails, it reports which value couldn't be parsed.
 - The parser specifically matches patterns like "2.11 kWh charged" and "8.98 kWh discharged" anywhere in page text.
 - chromedp renders the page; use `-wait-selector` (preferred) or `-wait` to ensure data is loaded.
+ - Power is extracted from patterns like `Power: -290 W`, `ChargePower: 300 W` (negative when charging), and `DischargePower: 300 W` (positive).
+ - CLI output swaps charged/discharged to correct the webpage's mislabeled values.

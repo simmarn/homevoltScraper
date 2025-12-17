@@ -13,13 +13,9 @@ import (
 )
 
 type Config struct {
-	URL                string
-	ChargedSelector    string
-	DischargedSelector string
-	// Optional: selector for current power value (e.g., "Power: 290 W")
-	PowerSelector string
-	WaitSelector  string
-	Wait          time.Duration
+	URL          string
+	WaitSelector string
+	Wait         time.Duration
 }
 
 type Result struct {
@@ -41,10 +37,6 @@ func ParseHTML(html string, cfg Config) (Result, error) {
 // parseDoc contains the core parsing logic operating on a goquery Document.
 func parseDoc(doc *goquery.Document, cfg Config) (Result, error) {
 	var out Result
-	// Try selectors first, then regex fallback
-	chargedText := selectText(doc, cfg.ChargedSelector)
-	dischargedText := selectText(doc, cfg.DischargedSelector)
-	powerText := selectText(doc, cfg.PowerSelector)
 	// Consider whole document text for additional signals
 	fullText := doc.Text()
 	// If either value missing, try direct extraction from text first
@@ -59,6 +51,7 @@ func parseDoc(doc *goquery.Document, cfg Config) (Result, error) {
 		}
 	}
 	// If still missing, attempt to locate nearby text via regex/keywords
+	var chargedText, dischargedText string
 	if out.KWhCharged == 0 {
 		if v, ok := regexFindKWh(fullText, []string{"charged", "charge"}); ok {
 			chargedText = v
@@ -90,14 +83,9 @@ func parseDoc(doc *goquery.Document, cfg Config) (Result, error) {
 		}
 	}
 
-	// Power parsing: Prefer selector text; fallback to text regex including ChargePower/DischargePower
-	if pv, ok := parsePowerW(powerText); ok {
+	// Power parsing: parse from text using patterns
+	if pv, ok := extractPowerWFromText(fullText); ok {
 		out.PowerW = pv
-	} else {
-		fullText := doc.Text()
-		if pv, ok := extractPowerWFromText(fullText); ok {
-			out.PowerW = pv
-		}
 	}
 
 	if len(parseErrs) > 0 {
@@ -176,22 +164,6 @@ func RenderHTMLChromedp(cfg Config) (string, error) {
 		return "", err
 	}
 	return html, nil
-}
-func selectText(doc *goquery.Document, sel string) string {
-	if strings.TrimSpace(sel) == "" {
-		return ""
-	}
-	var b strings.Builder
-	doc.Find(sel).Each(func(_ int, s *goquery.Selection) {
-		text := strings.TrimSpace(s.Text())
-		if text != "" {
-			if b.Len() > 0 {
-				b.WriteString(" ")
-			}
-			b.WriteString(text)
-		}
-	})
-	return b.String()
 }
 
 func parseKWh(s string) (float64, bool) {
