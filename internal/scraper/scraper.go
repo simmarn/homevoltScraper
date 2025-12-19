@@ -20,7 +20,6 @@ type Result struct {
 	KWhDischarged float64 `json:"kWh_discharged"`
 	KWhCharged    float64 `json:"kWh_charged"`
 	PowerW        float64 `json:"power_W"`
-	Source        string  `json:"source"`
 }
 
 // ParseHTML parses the provided HTML and extracts kWh charged/discharged.
@@ -30,6 +29,47 @@ func ParseHTML(html string, cfg Config) (Result, error) {
 		return Result{}, err
 	}
 	return parseDoc(doc, cfg)
+}
+
+// ParseText parses plain visible text content for kWh and power values.
+func ParseText(text string, cfg Config) (Result, error) {
+	var out Result
+	low := text
+	if vc, vd, ok := extractKWhFromText(low); ok {
+		out.KWhCharged = vc
+		out.KWhDischarged = vd
+	}
+	if pv, ok := extractPowerWFromText(low); ok {
+		out.PowerW = pv
+	}
+	if out.KWhCharged == 0 || out.KWhDischarged == 0 {
+		// Try nearby matches as a fallback
+		if out.KWhCharged == 0 {
+			if v, ok := regexFindKWh(low, []string{"charged", "charge"}); ok {
+				out.KWhCharged, _ = parseKWh(v)
+			} else {
+				out.KWhCharged, _ = parseKWh(findValueNear(low, []string{"charged", "charge"}))
+			}
+		}
+		if out.KWhDischarged == 0 {
+			if v, ok := regexFindKWh(low, []string{"discharged", "discharge"}); ok {
+				out.KWhDischarged, _ = parseKWh(v)
+			} else {
+				out.KWhDischarged, _ = parseKWh(findValueNear(low, []string{"discharged", "discharge"}))
+			}
+		}
+	}
+	parseErrs := []string{}
+	if out.KWhCharged == 0 {
+		parseErrs = append(parseErrs, "charged")
+	}
+	if out.KWhDischarged == 0 {
+		parseErrs = append(parseErrs, "discharged")
+	}
+	if len(parseErrs) > 0 {
+		return out, errors.New("failed to parse: " + strings.Join(parseErrs, ", "))
+	}
+	return out, nil
 }
 
 // parseDoc contains the core parsing logic operating on a goquery Document.
@@ -89,7 +129,6 @@ func parseDoc(doc *goquery.Document, cfg Config) (Result, error) {
 	if len(parseErrs) > 0 {
 		return out, errors.New("failed to parse: " + strings.Join(parseErrs, ", "))
 	}
-	out.Source = cfg.URL
 	return out, nil
 }
 
@@ -112,13 +151,18 @@ func FetchAndParseChromedp(cfg Config) (Result, error) {
 	defer cancel()
 
 	var html string
-	tasks := chromedp.Tasks{chromedp.Navigate(cfg.URL), chromedp.WaitVisible("body", chromedp.ByQuery)}
+	var innerText string
+	tasks := chromedp.Tasks{chromedp.Navigate(cfg.URL), chromedp.WaitVisible("body", chromedp.ByQuery), chromedp.Sleep(2 * time.Second)}
 	tasks = append(tasks, chromedp.OuterHTML("html", &html, chromedp.ByQuery))
+	tasks = append(tasks, chromedp.Text("body", &innerText, chromedp.ByQuery))
 	if err := chromedp.Run(ctx, tasks); err != nil {
 		return out, err
 	}
 
-	// Parse using the shared HTML parser
+	// Prefer parsing visible text; fallback to HTML if needed
+	if res, err := ParseText(innerText, cfg); err == nil {
+		return res, nil
+	}
 	return ParseHTML(html, cfg)
 }
 
@@ -138,7 +182,7 @@ func RenderHTMLChromedp(cfg Config) (string, error) {
 	defer cancel()
 
 	var html string
-	tasks := chromedp.Tasks{chromedp.Navigate(cfg.URL), chromedp.WaitVisible("body", chromedp.ByQuery)}
+	tasks := chromedp.Tasks{chromedp.Navigate(cfg.URL), chromedp.WaitVisible("body", chromedp.ByQuery), chromedp.Sleep(2 * time.Second)}
 	tasks = append(tasks, chromedp.OuterHTML("html", &html, chromedp.ByQuery))
 	if err := chromedp.Run(ctx, tasks); err != nil {
 		return "", err
@@ -171,27 +215,7 @@ func parseKWh(s string) (float64, bool) {
 }
 
 // parsePowerW extracts a power value in watts from a short text like "Power: 290 W" or "-300 W".
-func parsePowerW(s string) (float64, bool) {
-	if strings.TrimSpace(s) == "" {
-		return 0, false
-	}
-	re := regexp.MustCompile(`(?i)power:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*w`)
-	if m := re.FindStringSubmatch(s); len(m) == 2 {
-		var v float64
-		if _, err := fmt.Sscanf(m[1], "%f", &v); err == nil {
-			return v, true
-		}
-	}
-	// Fallback: any number followed by W
-	re2 := regexp.MustCompile(`(?i)(-?[0-9]+(?:\.[0-9]+)?)\s*w`)
-	if m := re2.FindStringSubmatch(s); len(m) == 2 {
-		var v float64
-		if _, err := fmt.Sscanf(m[1], "%f", &v); err == nil {
-			return v, true
-		}
-	}
-	return 0, false
-}
+// (parsePowerW removed: superseded by extractPowerWFromText parsing logic)
 
 // regexFindKWh tries several patterns around provided keywords to locate a numeric kWh value
 func regexFindKWh(text string, keywords []string) (string, bool) {
@@ -263,31 +287,45 @@ func extractKWhFromText(text string) (charged float64, discharged float64, ok bo
 // - "ChargePower: 290 W" (negative)
 func extractPowerWFromText(text string) (float64, bool) {
 	low := strings.ToLower(text)
-	// Prefer explicit generic Power: first, which includes the correct sign when charging/discharging.
-	rePower := regexp.MustCompile(`\bpower:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*w`)
+	// Prefer explicit generic Power label first. Support optional colon, unicode minus (U+2212),
+	// and flexible spacing before the unit.
+	rePower := regexp.MustCompile(`\bpower\b[^0-9\-−]*([\-−]?[0-9]+(?:\.[0-9]+)?)\s*w`)
 	if m := rePower.FindStringSubmatch(low); len(m) == 2 {
 		var v float64
-		if _, err := fmt.Sscanf(m[1], "%f", &v); err == nil {
+		num := strings.ReplaceAll(m[1], "−", "-")
+		if _, err := fmt.Sscanf(num, "%f", &v); err == nil {
 			return v, true
 		}
 	}
-	// ChargePower: respect an explicit sign if present; otherwise assume negative (charging)
-	reCh := regexp.MustCompile(`(?i)(?:\bcharge\s*power\b|\bchargepower\b)\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*w`)
+	// ChargePower: respect explicit sign; support unicode minus and optional colon
+	reCh := regexp.MustCompile(`(?i)(?:\bcharge\s*power\b|\bchargepower\b)[^0-9\-−]*([\-−]?[0-9]+(?:\.[0-9]+)?)\s*w`)
 	if m := reCh.FindStringSubmatch(low); len(m) == 2 {
 		var v float64
-		if _, err := fmt.Sscanf(m[1], "%f", &v); err == nil {
+		num := strings.ReplaceAll(m[1], "−", "-")
+		if _, err := fmt.Sscanf(num, "%f", &v); err == nil {
 			// If sign not present, v is positive; charging should be negative.
 			// However, when ChargePower is explicitly labeled, prefer given sign.
 			return v, true
 		}
 	}
-	// DischargePower: respect explicit sign; otherwise assume positive
-	reDis := regexp.MustCompile(`(?i)(?:\bdischarge\s*power\b|\bdischargepower\b)\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*w`)
+	// DischargePower: respect explicit sign; support unicode minus and optional colon
+	reDis := regexp.MustCompile(`(?i)(?:\bdischarge\s*power\b|\bdischargepower\b)[^0-9\-−]*([\-−]?[0-9]+(?:\.[0-9]+)?)\s*w`)
 	if m := reDis.FindStringSubmatch(low); len(m) == 2 {
 		var v float64
-		if _, err := fmt.Sscanf(m[1], "%f", &v); err == nil {
+		num := strings.ReplaceAll(m[1], "−", "-")
+		if _, err := fmt.Sscanf(num, "%f", &v); err == nil {
 			return v, true
 		}
 	}
+	// IdlePower: often shows small values when system is idle; treat as current power.
+	reIdle := regexp.MustCompile(`(?i)(?:\bidle\s*power\b|\bidlepower\b)[^0-9\-−]*([\-−]?[0-9]+(?:\.[0-9]+)?)\s*w`)
+	if m := reIdle.FindStringSubmatch(low); len(m) == 2 {
+		var v float64
+		num := strings.ReplaceAll(m[1], "−", "-")
+		if _, err := fmt.Sscanf(num, "%f", &v); err == nil {
+			return v, true
+		}
+	}
+	// Note: We do not use Setpoint or generic number+W fallbacks; if no labeled power present, fallback is 0 W.
 	return 0, false
 }
