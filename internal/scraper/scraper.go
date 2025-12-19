@@ -13,9 +13,7 @@ import (
 )
 
 type Config struct {
-	URL          string
-	WaitSelector string
-	Wait         time.Duration
+	URL string
 }
 
 type Result struct {
@@ -114,16 +112,7 @@ func FetchAndParseChromedp(cfg Config) (Result, error) {
 	defer cancel()
 
 	var html string
-	waitDur := cfg.Wait
-	if waitDur <= 0 {
-		waitDur = 2 * time.Second
-	}
-	tasks := chromedp.Tasks{chromedp.Navigate(cfg.URL)}
-	if strings.TrimSpace(cfg.WaitSelector) != "" {
-		tasks = append(tasks, chromedp.WaitVisible(cfg.WaitSelector, chromedp.ByQuery))
-	} else {
-		tasks = append(tasks, chromedp.Sleep(waitDur))
-	}
+	tasks := chromedp.Tasks{chromedp.Navigate(cfg.URL), chromedp.WaitVisible("body", chromedp.ByQuery)}
 	tasks = append(tasks, chromedp.OuterHTML("html", &html, chromedp.ByQuery))
 	if err := chromedp.Run(ctx, tasks); err != nil {
 		return out, err
@@ -149,16 +138,7 @@ func RenderHTMLChromedp(cfg Config) (string, error) {
 	defer cancel()
 
 	var html string
-	waitDur := cfg.Wait
-	if waitDur <= 0 {
-		waitDur = 2 * time.Second
-	}
-	tasks := chromedp.Tasks{chromedp.Navigate(cfg.URL)}
-	if strings.TrimSpace(cfg.WaitSelector) != "" {
-		tasks = append(tasks, chromedp.WaitVisible(cfg.WaitSelector, chromedp.ByQuery))
-	} else {
-		tasks = append(tasks, chromedp.Sleep(waitDur))
-	}
+	tasks := chromedp.Tasks{chromedp.Navigate(cfg.URL), chromedp.WaitVisible("body", chromedp.ByQuery)}
 	tasks = append(tasks, chromedp.OuterHTML("html", &html, chromedp.ByQuery))
 	if err := chromedp.Run(ctx, tasks); err != nil {
 		return "", err
