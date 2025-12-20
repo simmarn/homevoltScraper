@@ -19,6 +19,7 @@ func main() {
 	url := flag.String("url", "", "Homevolt battery status URL (required)")
 	broker := flag.String("mqtt-broker", "", "MQTT broker URL (e.g., tcp://host:1883)")
 	topic := flag.String("mqtt-topic", "homevolt/status", "MQTT topic to publish to (default: homevolt/status)")
+	haPrefix := flag.String("ha-prefix", "homeassistant", "Home Assistant MQTT discovery prefix (default: homeassistant)")
 	mqttUser := flag.String("mqtt-user", "", "MQTT username (optional)")
 	mqttPass := flag.String("mqtt-pass", "", "MQTT password (optional)")
 	interval := flag.Duration("interval", 300*time.Second, "Fetch/publish interval (default: 300s). Set to 0 for one-shot.")
@@ -47,6 +48,39 @@ func main() {
 			log.Fatalf("mqtt connect error: %v", token.Error())
 		}
 		defer c.Disconnect(250)
+
+		// Publish retained Home Assistant discovery configs on startup
+		publishHAConfig := func(uniqueID, name, deviceClass, stateClass, unit, valueTemplate string) {
+			cfg := map[string]any{
+				"name":                 name,
+				"unique_id":            uniqueID,
+				"state_topic":          *topic,
+				"unit_of_measurement":  unit,
+				"device_class":         deviceClass,
+				"state_class":          stateClass,
+				"value_template":       valueTemplate,
+				"device": map[string]any{
+					"identifiers": []string{"homevolt"},
+					"name":        "Homevolt",
+				},
+			}
+			payload, err := json.Marshal(cfg)
+			if err != nil {
+				log.Printf("ha config encode error: %v", err)
+				return
+			}
+			cfgTopic := fmt.Sprintf("%s/sensor/%s/config", *haPrefix, uniqueID)
+			t := c.Publish(cfgTopic, 0, true, payload)
+			t.Wait()
+			if t.Error() != nil {
+				log.Printf("ha config publish error (%s): %v", cfgTopic, t.Error())
+			}
+		}
+		// Energy sensors (kWh)
+		publishHAConfig("homevolt_total_charged", "Homevolt Total Charged", "energy", "total_increasing", "kWh", "{{ value_json.kWh_charged }}")
+		publishHAConfig("homevolt_total_discharged", "Homevolt Total Discharged", "energy", "total_increasing", "kWh", "{{ value_json.kWh_discharged }}")
+		// Power sensor (W)
+		publishHAConfig("homevolt_current_power", "Homevolt Current Power", "power", "measurement", "W", "{{ value_json.power_W }}")
 	}
 
 	// Helper to fetch and output/publish once
