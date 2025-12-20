@@ -22,6 +22,15 @@ type Result struct {
 	PowerW        float64 `json:"power_W"`
 }
 
+// normalizeText massages common formatting differences before parsing:
+// - Replace non-breaking spaces with regular spaces
+// - Convert decimal commas to dots to parse floats
+func normalizeText(s string) string {
+	s = strings.ReplaceAll(s, "\u00A0", " ")
+	s = strings.ReplaceAll(s, ",", ".")
+	return s
+}
+
 // ParseHTML parses the provided HTML and extracts kWh charged/discharged.
 func ParseHTML(html string, cfg Config) (Result, error) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
@@ -34,6 +43,7 @@ func ParseHTML(html string, cfg Config) (Result, error) {
 // ParseText parses plain visible text content for kWh and power values.
 func ParseText(text string, cfg Config) (Result, error) {
 	var out Result
+	text = normalizeText(text)
 	low := text
 	if vc, vd, ok := extractKWhFromText(low); ok {
 		out.KWhCharged = vc
@@ -76,7 +86,7 @@ func ParseText(text string, cfg Config) (Result, error) {
 func parseDoc(doc *goquery.Document, cfg Config) (Result, error) {
 	var out Result
 	// Consider whole document text for additional signals
-	fullText := doc.Text()
+	fullText := normalizeText(doc.Text())
 	// If either value missing, try direct extraction from text first
 	if out.KWhCharged == 0 || out.KWhDischarged == 0 {
 		if vc, vd, ok := extractKWhFromText(fullText); ok {
@@ -188,6 +198,29 @@ func RenderHTMLChromedp(cfg Config) (string, error) {
 		return "", err
 	}
 	return html, nil
+}
+
+// RenderTextChromedp navigates and returns the visible body text for debugging.
+func RenderTextChromedp(cfg Config) (string, error) {
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Headless,
+		chromedp.DisableGPU,
+		chromedp.NoSandbox,
+	)...)
+	defer cancelAlloc()
+	nop := func(string, ...any) {}
+	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(nop), chromedp.WithDebugf(nop), chromedp.WithErrorf(nop))
+	defer cancel()
+	ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	var innerText string
+	tasks := chromedp.Tasks{chromedp.Navigate(cfg.URL), chromedp.WaitVisible("body", chromedp.ByQuery), chromedp.Sleep(2 * time.Second)}
+	tasks = append(tasks, chromedp.Text("body", &innerText, chromedp.ByQuery))
+	if err := chromedp.Run(ctx, tasks); err != nil {
+		return "", err
+	}
+	return normalizeText(innerText), nil
 }
 
 func parseKWh(s string) (float64, bool) {

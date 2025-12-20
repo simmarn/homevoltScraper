@@ -7,8 +7,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"time"
 	"syscall"
+	"time"
 
 	"homevoltscraper/internal/scraper"
 
@@ -23,6 +23,7 @@ func main() {
 	mqttUser := flag.String("mqtt-user", "", "MQTT username (optional)")
 	mqttPass := flag.String("mqtt-pass", "", "MQTT password (optional)")
 	interval := flag.Duration("interval", 300*time.Second, "Fetch/publish interval (default: 300s). Set to 0 for one-shot.")
+	debug := flag.Bool("debug", false, "Print rendered page text when parsing errors occur")
 	flag.Parse()
 
 	if *url == "" {
@@ -52,13 +53,13 @@ func main() {
 		// Publish retained Home Assistant discovery configs on startup
 		publishHAConfig := func(uniqueID, name, deviceClass, stateClass, unit, valueTemplate string) {
 			cfg := map[string]any{
-				"name":                 name,
-				"unique_id":            uniqueID,
-				"state_topic":          *topic,
-				"unit_of_measurement":  unit,
-				"device_class":         deviceClass,
-				"state_class":          stateClass,
-				"value_template":       valueTemplate,
+				"name":                name,
+				"unique_id":           uniqueID,
+				"state_topic":         *topic,
+				"unit_of_measurement": unit,
+				"device_class":        deviceClass,
+				"state_class":         stateClass,
+				"value_template":      valueTemplate,
 				"device": map[string]any{
 					"identifiers": []string{"homevolt"},
 					"name":        "Homevolt",
@@ -88,6 +89,13 @@ func main() {
 		res, err := scraper.FetchAndParseChromedp(scraper.Config{URL: *url})
 		if err != nil {
 			log.Printf("fetch error: %v", err)
+			if *debug {
+				if txt, terr := scraper.RenderTextChromedp(scraper.Config{URL: *url}); terr == nil {
+					log.Printf("rendered text (debug): %s", txt)
+				} else {
+					log.Printf("debug render failed: %v", terr)
+				}
+			}
 			return
 		}
 		res.KWhCharged, res.KWhDischarged = res.KWhDischarged, res.KWhCharged

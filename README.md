@@ -10,6 +10,24 @@ go mod tidy
 go build -o bin/homevoltscraper ./cmd/homevoltscraper
 ```
 
+### Container (Podman)
+
+```bash
+# Build image
+podman build -t homevoltscraper .
+
+# Run one-shot publish to MQTT (uses host network to reach local URL)
+podman run --rm --network=host homevoltscraper \
+	-url "http://<homevolt-host>/battery/" \
+	-mqtt-broker "tcp://<mqtt-host>:1883" \
+	-interval 0
+
+# Continuous mode every 300s (default)
+podman run --rm --network=host homevoltscraper \
+	-url "http://<homevolt-host>/battery/" \
+	-mqtt-broker "tcp://<mqtt-host>:1883"
+```
+
 ## Usage
 
 `-url` is required. MQTT flags are optional; without a broker, the JSON payload is printed.

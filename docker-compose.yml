@@ -1,0 +1,24 @@
+services:
+  homevoltscraper:
+    image: simmarn/homevoltscraper:latest
+    container_name: homevoltscraper
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Stockholm
+    command:
+      - -url
+      - "${HOMEVOLT_URL}"
+      - -mqtt-broker
+      - "${MQTT_BROKER}"
+      - -mqtt-topic
+      - "${MQTT_TOPIC:-homevolt/status}"
+      - -mqtt-user
+      - "${MQTT_USER:-}"
+      - -mqtt-pass
+      - "${MQTT_PASS:-}"
+      - -interval
+      - "${INTERVAL:-300s}"
+      - -ha-prefix
+      - "${HA_PREFIX:-homeassistant}"
+      - -debug
