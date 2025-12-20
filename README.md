@@ -37,6 +37,25 @@ Examples:
 	-mqtt-broker "tcp://<mqtt-host>:1883" \
 	-mqtt-topic "my/homevolt/topic" \
 	-mqtt-user "user" -mqtt-pass "pass"
+
+## Continuous mode
+By default, the tool fetches and publishes continuously every 300 seconds.
+
+```bash
+# Custom interval (e.g., 60s)
+./bin/homevoltscraper -url "http://<homevolt-host>/battery/" \
+	-mqtt-broker "tcp://<mqtt-host>:1883" \
+	-interval 60s
+
+# One-shot (no loop)
+./bin/homevoltscraper -url "http://<homevolt-host>/battery/" \
+	-mqtt-broker "tcp://<mqtt-host>:1883" \
+	-interval 0
+
+# Continuous printing to stdout (no MQTT)
+./bin/homevoltscraper -url "http://<homevolt-host>/battery/" \
+	-interval 120s
+```
 ```
 
 ## Notes

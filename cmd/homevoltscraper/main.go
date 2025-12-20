@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"time"
+	"syscall"
 
 	"homevoltscraper/internal/scraper"
 
@@ -19,6 +21,7 @@ func main() {
 	topic := flag.String("mqtt-topic", "homevolt/status", "MQTT topic to publish to (default: homevolt/status)")
 	mqttUser := flag.String("mqtt-user", "", "MQTT username (optional)")
 	mqttPass := flag.String("mqtt-pass", "", "MQTT password (optional)")
+	interval := flag.Duration("interval", 300*time.Second, "Fetch/publish interval (default: 300s). Set to 0 for one-shot.")
 	flag.Parse()
 
 	if *url == "" {
@@ -26,48 +29,72 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	// MQTT flags are optional; if no broker is provided, print payload to stdout.
+	// MQTT flags are optional; if no broker is provided, we will print payload to stdout.
 
-	res, err := scraper.FetchAndParseChromedp(scraper.Config{URL: *url})
-	if err != nil {
-		log.Fatalf("error: %v", err)
+	// Configure and connect MQTT client if broker is set
+	clientID := fmt.Sprintf("homevoltscraper-%d", time.Now().UnixNano())
+	var c mqtt.Client
+	if *broker != "" {
+		opts := mqtt.NewClientOptions().AddBroker(*broker).SetClientID(clientID)
+		if *mqttUser != "" {
+			opts.SetUsername(*mqttUser)
+		}
+		if *mqttPass != "" {
+			opts.SetPassword(*mqttPass)
+		}
+		c = mqtt.NewClient(opts)
+		if token := c.Connect(); token.Wait() && token.Error() != nil {
+			log.Fatalf("mqtt connect error: %v", token.Error())
+		}
+		defer c.Disconnect(250)
 	}
 
-	// Correct mislabeled webpage: always swap charged/discharged in output
-	res.KWhCharged, res.KWhDischarged = res.KWhDischarged, res.KWhCharged
-
-	// Prepare JSON payload
-	payload, err := json.Marshal(res)
-	if err != nil {
-		log.Fatalf("failed to encode json: %v", err)
+	// Helper to fetch and output/publish once
+	doOnce := func() {
+		res, err := scraper.FetchAndParseChromedp(scraper.Config{URL: *url})
+		if err != nil {
+			log.Printf("fetch error: %v", err)
+			return
+		}
+		res.KWhCharged, res.KWhDischarged = res.KWhDischarged, res.KWhCharged
+		payload, err := json.Marshal(res)
+		if err != nil {
+			log.Printf("encode error: %v", err)
+			return
+		}
+		if *broker == "" {
+			os.Stdout.Write(payload)
+			os.Stdout.Write([]byte("\n"))
+			return
+		}
+		pub := c.Publish(*topic, 0, false, payload)
+		pub.Wait()
+		if pub.Error() != nil {
+			log.Printf("mqtt publish error: %v", pub.Error())
+		}
 	}
 
-	if *broker == "" {
-		// No broker: print JSON payload
-		os.Stdout.Write(payload)
-		os.Stdout.Write([]byte("\n"))
+	// One-shot mode
+	if *interval <= 0 {
+		doOnce()
 		return
 	}
-	// Configure and connect MQTT client
-	clientID := fmt.Sprintf("homevoltscraper-%d", time.Now().UnixNano())
-	opts := mqtt.NewClientOptions().AddBroker(*broker).SetClientID(clientID)
-	if *mqttUser != "" {
-		opts.SetUsername(*mqttUser)
-	}
-	if *mqttPass != "" {
-		opts.SetPassword(*mqttPass)
-	}
-	c := mqtt.NewClient(opts)
-	if token := c.Connect(); token.Wait() && token.Error() != nil {
-		log.Fatalf("mqtt connect error: %v", token.Error())
-	}
-	defer c.Disconnect(250)
 
-	// Publish payload (QoS=0, retain=false)
-	pub := c.Publish(*topic, 0, false, payload)
-	pub.Wait()
-	if pub.Error() != nil {
-		log.Fatalf("mqtt publish error: %v", pub.Error())
+	// Continuous mode with signal handling
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
+	ticker := time.NewTicker(*interval)
+	defer ticker.Stop()
+	// Run immediately once, then on each tick
+	doOnce()
+	for {
+		select {
+		case <-ticker.C:
+			doOnce()
+		case s := <-sigc:
+			log.Printf("received signal %v, exiting", s)
+			return
+		}
 	}
 
 }
