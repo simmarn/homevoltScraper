@@ -11,8 +11,14 @@ import (
 )
 
 func main() {
-	url := flag.String("url", "http://192.168.107.83/battery/", "Homevolt battery status URL")
+	url := flag.String("url", "", "Homevolt battery status URL (required)")
 	flag.Parse()
+
+	if *url == "" {
+		fmt.Fprintln(os.Stderr, "error: -url is required")
+		flag.Usage()
+		os.Exit(2)
+	}
 
 	res, err := scraper.FetchAndParseChromedp(scraper.Config{URL: *url})
 	if err != nil {

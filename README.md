@@ -12,8 +12,10 @@ go build -o bin/homevoltscraper ./cmd/homevoltscraper
 
 ## Usage
 
+`-url` is required.
+
 ```bash
-./bin/homevoltscraper -url "http://192.168.107.83/battery/"
+./bin/homevoltscraper -url "http://<homevolt-host>/battery/"
 ```
 
 Output: JSON.
@@ -22,10 +24,10 @@ Examples:
 
 ```bash
 # Basic usage (JSON output)
-./bin/homevoltscraper -url "http://192.168.107.83/battery/"
+./bin/homevoltscraper -url "http://<homevolt-host>/battery/"
 
 # Pretty-print with jq
-./bin/homevoltscraper -url "http://192.168.107.83/battery/" | jq
+./bin/homevoltscraper -url "http://<homevolt-host>/battery/" | jq
 ```
 
 ## Notes
