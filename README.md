@@ -12,10 +12,12 @@ go build -o bin/homevoltscraper ./cmd/homevoltscraper
 
 ## Usage
 
-`-url` is required.
+`-url` is required. MQTT flags are optional; without a broker, the JSON payload is printed.
 
 ```bash
-./bin/homevoltscraper -url "http://<homevolt-host>/battery/"
+./bin/homevoltscraper -url "http://<homevolt-host>/battery/" \
+	-mqtt-broker "tcp://<mqtt-host>:1883" \
+	-mqtt-topic "homevolt/status"
 ```
 
 Output: JSON.
@@ -23,11 +25,18 @@ Output: JSON.
 Examples:
 
 ```bash
-# Basic usage (JSON output)
+# Print JSON to stdout
 ./bin/homevoltscraper -url "http://<homevolt-host>/battery/"
 
-# Pretty-print with jq
-./bin/homevoltscraper -url "http://<homevolt-host>/battery/" | jq
+# Publish to MQTT (QoS 0, retain=false; default topic: homevolt/status)
+./bin/homevoltscraper -url "http://<homevolt-host>/battery/" \
+	-mqtt-broker "tcp://<mqtt-host>:1883"
+
+# Publish to a custom topic with credentials
+./bin/homevoltscraper -url "http://<homevolt-host>/battery/" \
+	-mqtt-broker "tcp://<mqtt-host>:1883" \
+	-mqtt-topic "my/homevolt/topic" \
+	-mqtt-user "user" -mqtt-pass "pass"
 ```
 
 ## Notes
